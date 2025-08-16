@@ -1,0 +1,30 @@
+services:
+  gitlab-runner:
+    container_name: gitlab-runner
+    image: gitlab/gitlab-runner:latest
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - runner1:/etc/gitlab-runner
+      - /root/config-gitlab:/etc/gitlab-runner
+    networks:
+      - service
+  nexus:
+    container_name: nexus
+    image: niop425/nexus_ssl:latest
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+      - "8443:8443"
+      - "8444:8444"
+      - "8555:8555"
+    networks:
+      - service
+networks:
+  service:
+    name: service
+    driver: bridge
+volumes:
+  runner1:
+    external: true
+  

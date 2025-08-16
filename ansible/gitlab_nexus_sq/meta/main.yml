@@ -1,0 +1,14 @@
+galaxy_info:
+  role_name: gitlab_nexus_sq
+  author: Niopt
+  description: Автоматизация установки Nexus и GitLab Runner с поддержкой защищённого Docker Registry (локальный TLS) / Automation of the installation of Nexus and GitLab Runner with support for a secure Docker Registry (local TLS)
+  license: MIT
+  min_ansible_version: 2.9
+
+  platforms:
+    - name: Ubuntu
+      versions:
+        - 20.04
+        - 22.04
+
+dependencies: []

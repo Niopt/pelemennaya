@@ -1,0 +1,173 @@
+- name: Update apt cache
+  apt:
+    update_cache: yes
+
+- name: Install prerequisites
+  apt:
+    name:
+      - curl
+      - ca-certificates
+    state: present
+    update_cache: yes
+
+- name: Загрузить модули overlay и br_netfilter
+  ansible.builtin.shell: |
+    install -m 0755 -d /etc/apt/keyrings
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+    chmod a+r /etc/apt/keyrings/docker.asc
+    echo \
+      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+      $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | \
+      tee /etc/apt/sources.list.d/docker.list > /dev/null
+  args:
+    executable: /bin/bash
+
+- name: Update apt cache
+  apt:
+    update_cache: yes
+
+- name: Install prerequisites
+  apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
+      - docker-compose
+    state: present
+    update_cache: yes
+
+- name: Загрузить модули overlay и br_netfilter
+  ansible.builtin.shell: |
+      docker volume create runner1
+  args:
+    executable: /bin/bash
+
+- name: docker compose
+  ansible.builtin.copy:
+    src: docker-compose.yml.j2     
+    dest: /tmp/docker-compose.yml
+
+- name: Запустить docker-compose
+  community.docker.docker_compose_v2:
+    project_src: /tmp        
+    state: present           
+    recreate: auto             
+    remove_orphans: yes       
+
+- name: Зарегистрировать GitLab Runner
+  community.docker.docker_container_exec:
+    container: gitlab-runner
+    command: >
+      gitlab-runner register --non-interactive
+      --url {{ gitlab_runner_url }}
+      --registration-token {{ gitlab_runner_token }}
+      --executor docker
+      --docker-image alpine:latest
+      --tag-list runner
+  register: result
+
+- name: Вставить network_mode внутрь [runners.docker]
+  ansible.builtin.lineinfile:
+    path: /root/config-gitlab/config.toml
+    regexp: '^network_mode'
+    line: '    network_mode = "service"'
+    insertafter: '^\[runners.docker\]'
+
+- name: Добавить extra_hosts и volumes, включить privileged
+  ansible.builtin.lineinfile:
+    path: /root/config-gitlab/config.toml
+    insertafter: '^\[runners.docker\]'
+    line: '    extra_hosts = ["ac6be0b495cc:212.193.30.149"]'
+    state: present
+
+- name: Вставить extra_hosts внутрь [runners.docker]
+  ansible.builtin.lineinfile:
+    path: /root/config-gitlab/config.toml
+    regexp: '^extra_hosts'
+    line: '    extra_hosts = ["ac6be0b495cc:212.193.30.149"]'
+    insertafter: '^\[runners.docker\]'
+
+- name: Вставить volumes внутрь [runners.docker]
+  ansible.builtin.lineinfile:
+    path: /root/config-gitlab/config.toml
+    regexp: '^volumes'
+    line: '    volumes = ["/var/run/docker.sock:/var/run/docker.sock", "/cache"]'
+    insertafter: '^\[runners.docker\]'
+
+- name: Вставить volumes внутрь [runners.docker]
+  ansible.builtin.lineinfile:
+    path: /root/config-gitlab/config.toml
+    regexp: '^tags'
+    line: '    tags = []'
+    insertafter: '^\[runners.docker\]'
+
+- name: Включить systemd как cgroup-драйвер в config.toml
+  ansible.builtin.replace:
+    path: /root/config-gitlab/config.toml
+    regexp: '^(\s*privileged\s*=\s*)false'
+    replace: '\1true'
+
+- name: Остановиться на 20 секунд
+  ansible.builtin.pause:
+    seconds: 20
+
+- name: Зарегистрировать nexus
+  vars_prompt:
+    - name: "nexus_keystore_pass"
+      prompt: "Введите пароль keystore для Nexus"
+      private: yes
+  community.docker.docker_container_exec:
+    container: nexus
+    command: >
+      keytool -exportcert -alias nexus -keystore /opt/sonatype/nexus/etc/ssl/keystore.jks -rfc -storepass {{ nexus_keystore_pass }} -file /tmp/ca.crt
+  register: result
+
+
+- name: Создать папку nexus:8444
+  ansible.builtin.file:
+    path: /etc/docker/certs.d/nexus:8444
+    state: directory
+    mode: '0755'    
+
+- name: Создать папку nexus:8555
+  ansible.builtin.file:
+    path: /etc/docker/certs.d/nexus:8555
+    state: directory
+    mode: '0755'
+
+- name: Скопировать сертификат в несколько папок
+  ansible.builtin.command:
+    cmd: docker cp nexus:/tmp/ca.crt {{ item }}
+  loop:
+    - /etc/docker/certs.d/nexus:8555/ca.crt
+    - /etc/docker/certs.d/nexus:8444/ca.crt
+
+- name: Получить информацию о контейнере
+  community.docker.docker_container_info:
+    name: nexus   
+  register: container_info
+
+- name: Получить IP контейнера
+  command: docker inspect -f '{{ "{{" }}.NetworkSettings.Networks.service.IPAddress{{ "}}" }}' nexus
+  register: nexus_ip_cmd
+
+- set_fact:
+    nexus_ip: "{{ nexus_ip_cmd.stdout }}"
+
+- name: Добавить запись в /etc/hosts
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    line: "{{ nexus_ip }} nexus"
+    state: present
+
+- name: Перезапустить Docker
+  ansible.builtin.systemd:
+    name: docker
+    state: restarted
+
+
+
+
+
